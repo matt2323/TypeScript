@@ -830,7 +830,6 @@ namespace ts {
         return { resolvedModule: undefined, failedLookupLocations };
 
         function tryResolve(extensions: Extensions): SearchResult<{ resolved: Resolved, isExternalLibraryImport: boolean }> {
-            //According to this ist should consider package.json
             const loader: ResolutionKindSpecificLoader = (extensions, candidate, onlyRecordFailures, state) => nodeLoadModuleByRelativeName(extensions, candidate, onlyRecordFailures, state, /*considerPackageJson*/ true);
             const resolved = tryLoadModuleUsingOptionalResolutionSettings(extensions, moduleName, containingDirectory, loader, state);
             if (resolved) {
@@ -1136,14 +1135,14 @@ namespace ts {
             return nodeLoadModuleByRelativeName(nextExtensions, candidate, onlyRecordFailures, state, /*considerPackageJson*/ false);
         };
 
-        //const onlyRecordFailures = !directoryProbablyExists(getDirectoryPath(file), state.host); //where was this used before?
+        const fileOnlyRecordFailures = file ? !directoryProbablyExists(getDirectoryPath(file), state.host) : undefined; //where was this used before?
 
         if (versionPaths && (!file || containsPath(candidate, file))) { //isn't containsPath(candidate, file) always set??? Because it came from combining paths?
             const moduleName = getRelativePathFromDirectory(candidate, file || combinePaths(candidate, "index"), /*ignoreCase*/ false);
             if (state.traceEnabled) {
                 trace(state.host, Diagnostics.package_json_has_a_typesVersions_entry_0_that_matches_compiler_version_1_looking_for_a_pattern_to_match_module_name_2, versionPaths.version, version, moduleName);
             }
-            const result = tryLoadModuleUsingPaths(extensions, moduleName, candidate, versionPaths.paths, loader, onlyRecordFailures, state);
+            const result = tryLoadModuleUsingPaths(extensions, moduleName, candidate, versionPaths.paths, loader, fileOnlyRecordFailures!, state);
             if (result) {
                 return removeIgnoredPackageId(result.value);
             }
@@ -1151,7 +1150,7 @@ namespace ts {
 
         if (file) {
             // It won't have a `packageId` set, because we disabled `considerPackageJson`.
-            return removeIgnoredPackageId(loader(extensions, file, onlyRecordFailures, state));
+            return removeIgnoredPackageId(loader(extensions, file, fileOnlyRecordFailures!, state));
         } else {
             //!
             const directoryExists = !onlyRecordFailures && directoryProbablyExists(candidate, state.host);
