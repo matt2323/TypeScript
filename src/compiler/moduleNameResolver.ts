@@ -830,6 +830,7 @@ namespace ts {
         return { resolvedModule: undefined, failedLookupLocations };
 
         function tryResolve(extensions: Extensions): SearchResult<{ resolved: Resolved, isExternalLibraryImport: boolean }> {
+            //According to this ist should consider package.json
             const loader: ResolutionKindSpecificLoader = (extensions, candidate, onlyRecordFailures, state) => nodeLoadModuleByRelativeName(extensions, candidate, onlyRecordFailures, state, /*considerPackageJson*/ true);
             const resolved = tryLoadModuleUsingOptionalResolutionSettings(extensions, moduleName, containingDirectory, loader, state);
             if (resolved) {
@@ -1039,17 +1040,13 @@ namespace ts {
         const packageInfo = considerPackageJson ? getPackageJsonInfo(candidate, "", onlyRecordFailures, state) : undefined;
         const packageId = packageInfo && packageInfo.packageId;
         const packageJsonContent = packageInfo && packageInfo.packageJsonContent;
-        const versionPaths = packageJsonContent && readPackageJsonTypesVersionPaths(packageJsonContent, state);
+        const versionPaths = packageJsonContent && readPackageJsonTypesVersionPaths(packageJsonContent, state); //didn't we just parse this? `packageInfo && packageInfo.versionPaths`. verified these are the same.
         return withPackageId(packageId, loadNodeModuleFromDirectoryWorker(extensions, candidate, onlyRecordFailures, state, packageJsonContent, versionPaths));
     }
 
+    //inline
     function loadNodeModuleFromDirectoryWorker(extensions: Extensions, candidate: string, onlyRecordFailures: boolean, state: ModuleResolutionState, packageJsonContent: PackageJsonPathFields | undefined, versionPaths: VersionPaths | undefined): PathAndExtension | undefined {
-        const fromPackageJson = packageJsonContent && loadModuleFromPackageJson(packageJsonContent, versionPaths, extensions, candidate, state);
-        if (fromPackageJson) {
-            return fromPackageJson;
-        }
-        const directoryExists = !onlyRecordFailures && directoryProbablyExists(candidate, state.host);
-        return loadModuleFromFile(extensions, combinePaths(candidate, "index"), !directoryExists, state);
+        return loadModuleFromPackageJson(packageJsonContent, versionPaths, extensions, candidate, onlyRecordFailures, state);
     }
 
     interface PackageJsonInfo {
@@ -1111,21 +1108,14 @@ namespace ts {
         }
     }
 
-    function loadModuleFromPackageJson(jsonContent: PackageJsonPathFields, versionPaths: VersionPaths | undefined, extensions: Extensions, candidate: string, state: ModuleResolutionState): PathAndExtension | undefined {
-        let file = extensions !== Extensions.JavaScript && extensions !== Extensions.Json
+    function loadModuleFromPackageJson(jsonContent: PackageJsonPathFields | undefined, versionPaths: VersionPaths | undefined, extensions: Extensions, candidate: string, onlyRecordFailures: boolean, state: ModuleResolutionState): PathAndExtension | undefined {
+        //Note: this is not just the entry, it's the result of combinePaths. Then we do `getRelativePathFromDirectory` again later...
+        let file = jsonContent && (extensions !== Extensions.JavaScript && extensions !== Extensions.Json
             ? readPackageJsonTypesFields(jsonContent, candidate, state)
-            : readPackageJsonMainField(jsonContent, candidate, state);
-        if (!file) {
-            if (extensions === Extensions.TypeScript) {
-                // When resolving typescript modules, try resolving using main field as well
-                file = readPackageJsonMainField(jsonContent, candidate, state);
-                if (!file) {
-                    return undefined;
-                }
-            }
-            else {
-                return undefined;
-            }
+            : readPackageJsonMainField(jsonContent, candidate, state));
+        if (!file && extensions === Extensions.TypeScript) { //neater -- move into above expression (and make const)
+            // When resolving typescript modules, try resolving using main field as well
+            file = jsonContent && readPackageJsonMainField(jsonContent, candidate, state);
         }
 
         const loader: ResolutionKindSpecificLoader = (extensions, candidate, onlyRecordFailures, state) => {
@@ -1146,10 +1136,10 @@ namespace ts {
             return nodeLoadModuleByRelativeName(nextExtensions, candidate, onlyRecordFailures, state, /*considerPackageJson*/ false);
         };
 
-        const onlyRecordFailures = !directoryProbablyExists(getDirectoryPath(file), state.host);
+        //const onlyRecordFailures = !directoryProbablyExists(getDirectoryPath(file), state.host); //where was this used before?
 
-        if (versionPaths && containsPath(candidate, file)) {
-            const moduleName = getRelativePathFromDirectory(candidate, file, /*ignoreCase*/ false);
+        if (versionPaths && (!file || containsPath(candidate, file))) { //isn't containsPath(candidate, file) always set??? Because it came from combining paths?
+            const moduleName = getRelativePathFromDirectory(candidate, file || combinePaths(candidate, "index"), /*ignoreCase*/ false);
             if (state.traceEnabled) {
                 trace(state.host, Diagnostics.package_json_has_a_typesVersions_entry_0_that_matches_compiler_version_1_looking_for_a_pattern_to_match_module_name_2, versionPaths.version, version, moduleName);
             }
@@ -1159,8 +1149,14 @@ namespace ts {
             }
         }
 
-        // It won't have a `packageId` set, because we disabled `considerPackageJson`.
-        return removeIgnoredPackageId(loader(extensions, file, onlyRecordFailures, state));
+        if (file) {
+            // It won't have a `packageId` set, because we disabled `considerPackageJson`.
+            return removeIgnoredPackageId(loader(extensions, file, onlyRecordFailures, state));
+        } else {
+            //!
+            const directoryExists = !onlyRecordFailures && directoryProbablyExists(candidate, state.host);
+            return loadModuleFromFile(extensions, combinePaths(candidate, "index"), !directoryExists, state);
+        }
     }
 
     /** Resolve from an arbitrarily specified file. Return `undefined` if it has an unsupported extension. */
